@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: floatchat_postgres
+    environment:
+      POSTGRES_DB: floatchat
+      POSTGRES_USER: floatchat
+      POSTGRES_PASSWORD: floatchat_secret_2024
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U floatchat -d floatchat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: floatchat_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Ollama LLM Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: floatchat_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ChromaDB Vector Database
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: floatchat_chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  chroma_data:
+
+networks:
+  default:
+    name: floatchat_network
