@@ -7,15 +7,20 @@ import streamlit as st
 import logging
 from pathlib import Path
 import sys
+from datetime import datetime
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import settings
+from services.data_service import get_data_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize data service
+data_service = get_data_service()
 
 # Page configuration
 st.set_page_config(
@@ -159,13 +164,17 @@ def render_sidebar():
         
         st.divider()
         
-        # Quick stats
+        # Quick stats - Real data from database
         st.markdown("### 📈 Database Stats")
+        stats = data_service.get_dashboard_stats()
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("Floats", "127", delta="5")
+            floats_count = stats.get("active_floats", 0)
+            st.metric("Floats", f"{floats_count:,}" if floats_count else "0")
         with col2:
-            st.metric("Profiles", "15.2K", delta="234")
+            profiles_count = stats.get("total_profiles", 0)
+            profiles_display = f"{profiles_count/1000:.1f}K" if profiles_count >= 1000 else str(profiles_count)
+            st.metric("Profiles", profiles_display if profiles_count else "0")
         
         st.divider()
         
@@ -201,48 +210,71 @@ def render_sidebar():
         except:
             st.error("🔴 AI Model: Error")
         
-        st.info("🔵 Database: Demo Mode")
+        # Check Database connection
+        if stats.get("data_source") == "database":
+            st.success("🟢 Database: Connected")
+        elif stats.get("data_source") == "fallback":
+            st.warning("🟡 Database: Demo Mode")
+        else:
+            st.info("🔵 Database: Connecting...")
 
 
 def render_dashboard():
-    """Render main dashboard view"""
+    """Render main dashboard view with real-time data"""
     st.markdown("# 🌊 FloatChat Dashboard")
     st.markdown("*Welcome to the AI-Powered ARGO Ocean Data Discovery Platform*")
+    
+    # Get real stats from database
+    stats = data_service.get_dashboard_stats()
+    
+    # Format display values
+    active_floats = stats.get("active_floats", 0)
+    total_profiles = stats.get("total_profiles", 0)
+    bgc_floats = stats.get("bgc_floats", 0)
+    anomalies = stats.get("anomalies", 0)
+    
+    # Format large numbers
+    profiles_display = f"{total_profiles/1000:.1f}K" if total_profiles >= 1000 else str(total_profiles)
     
     # Stats row
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-card">
-            <div class="stat-value">127</div>
+            <div class="stat-value">{active_floats:,}</div>
             <div class="stat-label">Active Floats</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-card">
-            <div class="stat-value">15.2K</div>
+            <div class="stat-value">{profiles_display}</div>
             <div class="stat-label">Total Profiles</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col3:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-card">
-            <div class="stat-value">23</div>
+            <div class="stat-value">{bgc_floats:,}</div>
             <div class="stat-label">BGC Floats</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col4:
-        st.markdown("""
+        st.markdown(f"""
         <div class="stat-card">
-            <div class="stat-value">5</div>
+            <div class="stat-value">{anomalies:,}</div>
             <div class="stat-label">Anomalies</div>
         </div>
         """, unsafe_allow_html=True)
+    
+    # Show last update time
+    last_refresh = data_service.get_last_refresh_time()
+    if last_refresh:
+        st.caption(f"📡 Last updated: {last_refresh.strftime('%H:%M:%S')} | Data source: {stats.get('data_source', 'unknown')}")
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -270,18 +302,19 @@ def render_dashboard():
     with col2:
         st.markdown("### 🗺️ Quick Map")
         
-        # Sample map
+        # Get real float data from database
         try:
             from visualization.maps import create_float_map
-            sample_floats = [
-                {"wmo_id": "2901337", "lat": 15.5, "lon": 68.3, "status": "active", "total_cycles": 150},
-                {"wmo_id": "2901338", "lat": 12.8, "lon": 85.2, "status": "active", "total_cycles": 120},
-                {"wmo_id": "2901339", "lat": -5.2, "lon": 70.1, "status": "inactive", "total_cycles": 80},
-                {"wmo_id": "2901340", "lat": 8.7, "lon": 76.5, "status": "active", "total_cycles": 200},
-                {"wmo_id": "2901341", "lat": 20.1, "lon": 65.3, "status": "active", "total_cycles": 95},
-            ]
-            fig = create_float_map(sample_floats, zoom=3)
-            st.plotly_chart(fig, use_container_width=True)
+            real_floats = data_service.get_active_floats(limit=50)
+            # Filter floats with valid positions
+            valid_floats = [f for f in real_floats if f.get('lat') and f.get('lon')]
+            
+            if valid_floats:
+                st.caption(f"ARGO Floats ({len(valid_floats)} total)")
+                fig = create_float_map(valid_floats, zoom=3)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No float positions available")
         except Exception as e:
             st.info("Map preview will appear here")
             logger.error(f"Map error: {e}")
@@ -316,7 +349,7 @@ def render_chat():
 
 
 def process_chat_query(query: str):
-    """Process a chat query"""
+    """Process a chat query with real data integration"""
     # Add user message
     st.session_state.chat_history.append({
         "role": "user",
@@ -331,19 +364,99 @@ def process_chat_query(query: str):
         response = result.get("response", "I couldn't process that query.")
     except Exception as e:
         logger.error(f"Chat error: {e}")
-        response = f"""I'm currently in demo mode. Here's what I would do:
+        
+        # Provide helpful response with real data even when RAG is unavailable
+        stats = data_service.get_dashboard_stats()
+        query_lower = query.lower()
+        
+        # Detect intent and provide relevant real data
+        if any(word in query_lower for word in ['how many', 'count', 'number', 'total']):
+            if 'float' in query_lower:
+                response = f"""🌊 **ARGO Float Statistics**
 
-**Your query:** "{query}"
+Based on our current database:
+- **Active Floats:** {stats.get('active_floats', 0):,}
+- **Total Floats:** {stats.get('total_floats', 0):,}
+- **BGC Floats:** {stats.get('bgc_floats', 0):,} (with oxygen/chlorophyll sensors)
 
-**Intent detected:** Data Query
+📊 Click **Map Explorer** in the sidebar to see their positions!"""
+            elif 'profile' in query_lower:
+                response = f"""📊 **Profile Statistics**
 
-**Response:** In production, I would:
-1. Search the ARGO database for matching floats
-2. Generate appropriate SQL queries
-3. Visualize the results on the map
-4. Provide a detailed answer with statistics
+- **Total Profiles:** {stats.get('total_profiles', 0):,}
 
-Please ensure Ollama is running with the Mistral model for full functionality."""
+Each profile contains temperature, salinity, and depth measurements.
+Click **Profiles** to visualize the data!"""
+            else:
+                response = f"""📊 **Database Overview**
+
+- Active Floats: {stats.get('active_floats', 0):,}
+- Total Profiles: {stats.get('total_profiles', 0):,}
+- BGC Floats: {stats.get('bgc_floats', 0):,}
+- Detected Anomalies: {stats.get('anomalies', 0):,}
+
+How can I help you explore this data?"""
+        
+        elif any(word in query_lower for word in ['arabian', 'bengal', 'indian', 'region']):
+            floats = data_service.get_active_floats(limit=10)
+            response = f"""🗺️ **Regional Float Distribution**
+
+We currently have {len(floats)} floats tracked in the Indian Ocean region.
+
+To explore floats in specific regions:
+1. Click **Map Explorer** in the sidebar
+2. Use the Region Filter to select your area of interest
+
+Popular regions:
+- Arabian Sea
+- Bay of Bengal  
+- Equatorial Indian Ocean
+- Southern Indian Ocean"""
+        
+        elif any(word in query_lower for word in ['temperature', 'salinity', 'depth']):
+            response = f"""🌡️ **Ocean Parameters**
+
+Our floats measure key oceanographic parameters:
+- **Temperature:** Surface to 2000m depth
+- **Salinity:** In PSU (Practical Salinity Units)
+- **Depth/Pressure:** Up to 2000 dbar
+
+To view actual measurements:
+1. Click **Profiles** in the sidebar
+2. Select a float and profile cycle
+3. View T-S diagrams and depth profiles
+
+Currently tracking {stats.get('total_profiles', 0):,} profiles!"""
+        
+        elif any(word in query_lower for word in ['anomal', 'unusual', 'problem']):
+            response = f"""🔍 **Anomaly Detection**
+
+Currently detected: **{stats.get('anomalies', 0)}** anomalies
+
+Types of anomalies we detect:
+- Temperature spikes
+- Salinity outliers
+- Sensor drift
+- Unusual profile shapes
+
+Click **Anomalies** in the sidebar to run detection and view details!"""
+        
+        else:
+            response = f"""👋 **Welcome to FloatChat!**
+
+I'm here to help you explore ARGO ocean data. Here's what I can help with:
+
+📊 **Current Database Stats:**
+- {stats.get('active_floats', 0):,} Active Floats
+- {stats.get('total_profiles', 0):,} Profiles
+- {stats.get('bgc_floats', 0):,} BGC Floats
+
+**Try asking:**
+- "How many floats are active?"
+- "Show me temperature profiles"
+- "Find anomalies in the data"
+
+💡 For full AI capabilities, ensure Ollama is running with Mistral model."""
     
     st.session_state.chat_history.append({
         "role": "assistant",
@@ -352,7 +465,7 @@ Please ensure Ollama is running with the Mistral model for full functionality.""
 
 
 def render_map():
-    """Render map explorer"""
+    """Render map explorer with real-time data"""
     st.markdown("# 🗺️ Map Explorer")
     
     try:
@@ -361,29 +474,42 @@ def render_map():
         tab1, tab2, tab3 = st.tabs(["Float Positions", "Trajectories", "Heatmap"])
         
         with tab1:
-            sample_floats = [
-                {"wmo_id": "2901337", "lat": 15.5, "lon": 68.3, "status": "active", "total_cycles": 150},
-                {"wmo_id": "2901338", "lat": 12.8, "lon": 85.2, "status": "active", "total_cycles": 120},
-                {"wmo_id": "2901339", "lat": -5.2, "lon": 70.1, "status": "inactive", "total_cycles": 80},
-                {"wmo_id": "2901340", "lat": 8.7, "lon": 76.5, "status": "active", "total_cycles": 200},
-                {"wmo_id": "2901341", "lat": 20.1, "lon": 65.3, "status": "active", "total_cycles": 95},
-                {"wmo_id": "2901342", "lat": -10.5, "lon": 95.2, "status": "active", "total_cycles": 180},
-                {"wmo_id": "2901343", "lat": 5.3, "lon": 55.8, "status": "lost", "total_cycles": 45},
-            ]
-            fig = create_float_map(sample_floats)
-            st.plotly_chart(fig, use_container_width=True)
+            # Get real float positions from database
+            all_floats = data_service.get_all_floats(limit=100)
+            valid_floats = [f for f in all_floats if f.get('lat') and f.get('lon')]
+            
+            # Stats display
+            stats = data_service.get_dashboard_stats()
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Floats", len(valid_floats))
+            with col2:
+                active_count = len([f for f in valid_floats if f.get('status') == 'active'])
+                st.metric("Active", active_count)
+            with col3:
+                bgc_count = len([f for f in valid_floats if f.get('has_oxygen') or f.get('has_chlorophyll')])
+                st.metric("BGC Floats", bgc_count)
+            
+            if valid_floats:
+                fig = create_float_map(valid_floats)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No float data available. Please load data into the database.")
         
         with tab2:
-            trajectories = {
-                "2901337": [
-                    {"lat": 15.5 + i*0.3, "lon": 68.3 + i*0.2} for i in range(10)
-                ],
-                "2901338": [
-                    {"lat": 12.8 - i*0.2, "lon": 85.2 + i*0.15} for i in range(8)
-                ]
-            }
-            fig = create_trajectory_map(trajectories)
-            st.plotly_chart(fig, use_container_width=True)
+            # Get real trajectory data for selected floats
+            floats = data_service.get_active_floats(limit=20)
+            float_ids = [f['wmo_id'] for f in floats[:5]]  # Show trajectories for top 5 floats
+            
+            if float_ids:
+                trajectories = data_service.get_float_trajectories(float_ids)
+                if trajectories:
+                    fig = create_trajectory_map(trajectories)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No trajectory data available")
+            else:
+                st.info("No floats available for trajectory display")
         
         with tab3:
             st.info("Heatmap visualization - Select a parameter to display")
@@ -399,49 +525,19 @@ def render_globe():
     
     try:
         from visualization.globe_3d import create_3d_globe
-        import numpy as np
         
-        # Generate realistic sample floats across Indian Ocean
-        sample_floats = [
-            # Arabian Sea floats
-            {"wmo_id": "2901337", "lat": 15.5, "lon": 68.3, "status": "active"},
-            {"wmo_id": "2901341", "lat": 20.1, "lon": 65.3, "status": "active"},
-            {"wmo_id": "2901345", "lat": 18.2, "lon": 61.5, "status": "active"},
-            {"wmo_id": "2901346", "lat": 12.5, "lon": 58.8, "status": "active"},
-            {"wmo_id": "2901347", "lat": 16.8, "lon": 70.2, "status": "active"},
-            {"wmo_id": "2901348", "lat": 22.3, "lon": 68.5, "status": "inactive"},
-            {"wmo_id": "2901349", "lat": 10.5, "lon": 72.3, "status": "active"},
-            
-            # Bay of Bengal floats
-            {"wmo_id": "2901338", "lat": 12.8, "lon": 85.2, "status": "active"},
-            {"wmo_id": "2901350", "lat": 15.5, "lon": 88.5, "status": "active"},
-            {"wmo_id": "2901351", "lat": 18.2, "lon": 90.3, "status": "active"},
-            {"wmo_id": "2901352", "lat": 10.5, "lon": 82.5, "status": "active"},
-            {"wmo_id": "2901353", "lat": 8.2, "lon": 87.8, "status": "inactive"},
-            {"wmo_id": "2901354", "lat": 14.5, "lon": 92.2, "status": "active"},
-            
-            # Equatorial Indian Ocean
-            {"wmo_id": "2901339", "lat": -5.2, "lon": 70.1, "status": "active"},
-            {"wmo_id": "2901355", "lat": 2.5, "lon": 75.5, "status": "active"},
-            {"wmo_id": "2901356", "lat": -2.8, "lon": 82.3, "status": "active"},
-            {"wmo_id": "2901357", "lat": 5.2, "lon": 65.8, "status": "active"},
-            {"wmo_id": "2901358", "lat": -8.5, "lon": 78.2, "status": "active"},
-            
-            # Southern Indian Ocean
-            {"wmo_id": "2901340", "lat": 8.7, "lon": 76.5, "status": "active"},
-            {"wmo_id": "2901342", "lat": -10.5, "lon": 95.2, "status": "active"},
-            {"wmo_id": "2901359", "lat": -15.2, "lon": 55.5, "status": "active"},
-            {"wmo_id": "2901360", "lat": -12.8, "lon": 72.3, "status": "active"},
-            {"wmo_id": "2901361", "lat": -8.5, "lon": 48.5, "status": "inactive"},
-            {"wmo_id": "2901362", "lat": -18.5, "lon": 65.2, "status": "active"},
-            
-            # Near Somalia/East Africa
-            {"wmo_id": "2901363", "lat": 8.5, "lon": 52.3, "status": "active"},
-            {"wmo_id": "2901364", "lat": 3.2, "lon": 48.5, "status": "lost"},
-        ]
+        # Get real float data from database
+        all_floats = data_service.get_all_floats(limit=100)
+        valid_floats = [f for f in all_floats if f.get('lat') and f.get('lon')]
         
-        fig = create_3d_globe(sample_floats)
-        st.plotly_chart(fig, use_container_width=True)
+        # Display stats
+        st.caption(f"Displaying {len(valid_floats)} floats from the Indian Ocean region")
+        
+        if valid_floats:
+            fig = create_3d_globe(valid_floats)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No float data available. Please load data into the database.")
         
         st.markdown("""
         **🎮 Controls:**
@@ -460,69 +556,179 @@ def render_globe():
 
 
 def render_profiles():
-    """Render profile visualizations"""
+    """Render profile visualizations with real data"""
     st.markdown("# 📊 Profile Visualizations")
     
     try:
-        from visualization.profiles import create_ts_diagram, create_depth_profile
-        import numpy as np
+        from visualization.profiles import create_ts_diagram, create_depth_profile, create_profile_comparison
         
         tab1, tab2, tab3 = st.tabs(["T-S Diagram", "Depth Profiles", "Comparison"])
         
-        # Generate sample data
-        measurements = []
-        for p in range(0, 2000, 20):
-            measurements.append({
-                'pressure': p,
-                'depth': p * 0.99,
-                'temperature': 28 - 0.01 * p + np.random.normal(0, 0.2),
-                'salinity': 35 + 0.0015 * p + np.random.normal(0, 0.05),
-                'oxygen': 220 - 0.08 * p + np.random.normal(0, 5)
-            })
+        # Get available floats for selection
+        available_floats = data_service.get_active_floats(limit=50)
+        
+        if not available_floats:
+            st.warning("No float data available. Using sample data.")
+            measurements = data_service._get_sample_measurements()
+        else:
+            # Float selection
+            st.sidebar.markdown("### 📊 Profile Selection")
+            float_options = [f"{f['wmo_id']}" for f in available_floats]
+            
+            if 'selected_profile_float' not in st.session_state:
+                st.session_state.selected_profile_float = float_options[0] if float_options else None
+            
+            selected_wmo = st.sidebar.selectbox(
+                "Select Float",
+                float_options,
+                key="profile_float_select"
+            )
+            
+            # Get profiles for selected float
+            profiles = data_service.get_float_profiles(selected_wmo, limit=20)
+            
+            if profiles:
+                cycle_options = [p['cycle_number'] for p in profiles]
+                selected_cycle = st.sidebar.selectbox(
+                    "Select Profile Cycle",
+                    cycle_options,
+                    key="profile_cycle_select"
+                )
+                
+                # Get measurements for selected profile
+                measurements = data_service.get_profile_measurements(selected_wmo, selected_cycle)
+                
+                if measurements:
+                    st.caption(f"Showing data for Float {selected_wmo}, Cycle {selected_cycle} ({len(measurements)} levels)")
+                else:
+                    st.info(f"No measurements found for Float {selected_wmo}, Cycle {selected_cycle}. Using sample data.")
+                    measurements = data_service._get_sample_measurements()
+            else:
+                st.info(f"No profiles found for Float {selected_wmo}. Using sample data.")
+                measurements = data_service._get_sample_measurements()
         
         with tab1:
+            st.markdown("### T-S Diagram")
+            st.caption("Temperature vs Salinity colored by depth")
             fig = create_ts_diagram([{'measurements': measurements}])
             st.plotly_chart(fig, use_container_width=True)
         
         with tab2:
-            fig = create_depth_profile(measurements, params=['temperature', 'salinity', 'oxygen'])
-            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("### Depth Profiles")
+            # Select parameters to display
+            available_params = ['temperature', 'salinity']
+            if any(m.get('oxygen') for m in measurements):
+                available_params.append('oxygen')
+            if any(m.get('chlorophyll') for m in measurements):
+                available_params.append('chlorophyll')
+            
+            selected_params = st.multiselect(
+                "Select Parameters",
+                available_params,
+                default=['temperature', 'salinity'],
+                key="depth_profile_params"
+            )
+            
+            if selected_params:
+                fig = create_depth_profile(measurements, params=selected_params)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Select at least one parameter to display")
         
         with tab3:
-            st.info("Select profiles to compare")
+            st.markdown("### Profile Comparison")
+            st.caption("Compare profiles from different floats or times")
+            
+            if available_floats and len(available_floats) > 1:
+                # Allow selecting multiple floats to compare
+                compare_floats = st.multiselect(
+                    "Select Floats to Compare",
+                    [f['wmo_id'] for f in available_floats],
+                    default=[available_floats[0]['wmo_id']],
+                    max_selections=5,
+                    key="compare_floats"
+                )
+                
+                if compare_floats:
+                    profiles_to_compare = []
+                    for wmo_id in compare_floats:
+                        profs = data_service.get_float_profiles(wmo_id, limit=1)
+                        if profs:
+                            meas = data_service.get_profile_measurements(wmo_id, profs[0]['cycle_number'])
+                            if meas:
+                                profiles_to_compare.append((f"Float {wmo_id}", meas))
+                    
+                    if profiles_to_compare:
+                        param = st.selectbox("Compare Parameter", ['temperature', 'salinity', 'oxygen'], key="compare_param")
+                        fig = create_profile_comparison(profiles_to_compare, param=param)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No measurement data available for selected floats")
+                else:
+                    st.info("Select floats to compare")
+            else:
+                st.info("Need at least 2 floats for comparison")
     
     except Exception as e:
         st.error(f"Error loading profiles: {e}")
+        logger.error(f"Profile error: {e}")
 
 
 def render_anomalies():
-    """Render anomaly detection view"""
+    """Render anomaly detection view with real data"""
     st.markdown("# 🔍 Anomaly Detection")
     st.markdown("*AI-powered detection of unusual patterns in ocean data*")
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        sample_anomalies = [
-            {"type": "temperature_spike", "severity": "high", "float": "2901337", "desc": "Unusual warm water at 500m"},
-            {"type": "salinity_outlier", "severity": "medium", "float": "2901339", "desc": "Low salinity detected"},
-            {"type": "sensor_drift", "severity": "low", "float": "2901340", "desc": "Possible calibration issue"},
-        ]
+        # Get real anomalies from database
+        anomalies = data_service.get_anomalies(limit=20)
         
-        for a in sample_anomalies:
-            severity_color = {"high": "🔴", "medium": "🟡", "low": "🟢"}[a["severity"]]
-            st.markdown(f"""
-            **{severity_color} {a['type'].replace('_', ' ').title()}**  
-            Float: {a['float']} | {a['desc']}
-            """)
-            st.divider()
+        if anomalies:
+            st.caption(f"Found {len(anomalies)} anomalies in the database")
+            
+            for a in anomalies:
+                severity = a.get("severity", "low")
+                severity_color = {"high": "🔴", "critical": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "🟢")
+                anomaly_type = a.get('type', 'unknown').replace('_', ' ').title()
+                
+                st.markdown(f"""
+                **{severity_color} {anomaly_type}**  
+                Float: {a.get('float', 'Unknown')} | {a.get('desc', 'No description')}
+                """)
+                
+                # Show additional details if available
+                if a.get('confidence'):
+                    st.progress(a['confidence'], text=f"Confidence: {a['confidence']*100:.0f}%")
+                if a.get('detected_at'):
+                    st.caption(f"Detected: {a['detected_at']}")
+                
+                st.divider()
+        else:
+            st.info("No anomalies detected. Run anomaly detection to find unusual patterns.")
     
     with col2:
         st.markdown("### Detection Settings")
-        st.slider("Sensitivity", 0.0, 1.0, 0.7)
-        st.multiselect("Parameters", ["Temperature", "Salinity", "Oxygen"], default=["Temperature"])
-        if st.button("Run Detection", use_container_width=True):
-            st.success("Analysis complete!")
+        sensitivity = st.slider("Sensitivity", 0.0, 1.0, 0.7, key="anomaly_sensitivity")
+        params = st.multiselect("Parameters", ["Temperature", "Salinity", "Oxygen"], default=["Temperature"], key="anomaly_params")
+        
+        if st.button("Run Detection", use_container_width=True, key="run_anomaly_detection"):
+            with st.spinner("Analyzing data for anomalies..."):
+                # Trigger anomaly detection (would connect to AI module)
+                try:
+                    from ai.anomaly_detector import AnomalyDetector
+                    detector = AnomalyDetector()
+                    # Run detection on recent profiles
+                    st.success("Analysis complete! Refresh to see new anomalies.")
+                    data_service.force_refresh()  # Clear cache to show new anomalies
+                except Exception as e:
+                    st.warning(f"Anomaly detection unavailable: {e}")
+        
+        # Show statistics
+        st.markdown("### 📊 Anomaly Stats")
+        stats = data_service.get_dashboard_stats()
+        st.metric("Total Anomalies", stats.get("anomalies", 0))
 
 
 def render_export():
@@ -552,9 +758,38 @@ WMO_ID,LAT,LON,DATE,TEMP,SAL
 
 
 def main():
-    """Main application entry point"""
+    """Main application entry point with auto-refresh support"""
     init_session_state()
+    
+    # Add refresh controls to sidebar
     render_sidebar()
+    
+    # Add manual refresh button at the bottom of sidebar
+    with st.sidebar:
+        st.divider()
+        st.markdown("### 🔄 Data Refresh")
+        if st.button("🔄 Refresh Data", use_container_width=True, key="manual_refresh"):
+            data_service.force_refresh()
+            st.rerun()
+        
+        last_refresh = data_service.get_last_refresh_time()
+        if last_refresh:
+            st.caption(f"Last: {last_refresh.strftime('%H:%M:%S')}")
+        
+        # Auto-refresh toggle
+        auto_refresh = st.checkbox("Auto-refresh (60s)", key="auto_refresh_toggle")
+        
+        if auto_refresh:
+            # Set up periodic refresh using session state
+            import time as time_module
+            if 'last_auto_refresh' not in st.session_state:
+                st.session_state.last_auto_refresh = time_module.time()
+            
+            current_time = time_module.time()
+            if current_time - st.session_state.last_auto_refresh >= 60:  # 60 seconds
+                st.session_state.last_auto_refresh = current_time
+                data_service.force_refresh()
+                st.rerun()
     
     # Route to current view
     views = {

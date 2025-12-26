@@ -15,7 +15,7 @@ from sqlalchemy.pool import QueuePool
 import sys
 sys.path.append('..')
 from config import settings
-from .models import Base, Float, Profile, Measurement, Region, INDIAN_OCEAN_REGIONS
+from .models import Base, Float, Profile, Measurement, Region, FloatStatus, INDIAN_OCEAN_REGIONS
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ class DatabaseManager:
             stats = {
                 "total_floats": session.query(func.count(Float.id)).scalar(),
                 "active_floats": session.query(func.count(Float.id)).filter(
-                    Float.status == "active"
+                    Float.status == FloatStatus.ACTIVE
                 ).scalar(),
                 "total_profiles": session.query(func.count(Profile.id)).scalar(),
                 "total_measurements": session.query(func.count(Measurement.id)).scalar(),
