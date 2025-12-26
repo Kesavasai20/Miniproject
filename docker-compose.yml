@@ -1,6 +1,40 @@
 version: '3.8'
 
 services:
+  # FloatChat Application
+  floatchat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: floatchat_app
+    ports:
+      - "8501:8501"
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=floatchat
+      - POSTGRES_USER=floatchat
+      - POSTGRES_PASSWORD=floatchat_secret_2024
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OLLAMA_HOST=http://ollama:11434
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      chromadb:
+        condition: service_started
+    restart: unless-stopped
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
